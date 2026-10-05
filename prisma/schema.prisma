@@ -1,0 +1,1182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Controls how attendance is recorded for a school
+enum AttendanceMode {
+  ONCE_DAILY   // One submission per class per day
+  TWICE_DAILY  // AM and PM shifts
+  PERIOD_WISE  // Each period tracked individually
+}
+
+/// Lifecycle state of an academic year within a school
+enum AcademicYearStatus {
+  DRAFT      // Created but not yet started
+  ACTIVE     // Currently running year
+  COMPLETED  // Closed year
+}
+
+/// Status of a fee correction request raised by an Auditor or Accountant
+enum FeeCorrectionStatus {
+  PENDING
+  OPEN
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  APPLIED
+  CANCELLED
+}
+
+/// Status of a parent call attempt
+enum CallStatus {
+  PENDING    // Not yet called / queued
+  QUEUED     // In dial queue
+  DIALING    // Outbound dialing initiated
+  RINGING    // Phone ringing
+  IN_PROGRESS // Conversation in progress
+  COMPLETED  // Call completed
+  NO_ANSWER  // Ringing timeout / unanswered
+  BUSY       // Line busy
+  REJECTED   // Call rejected by parent
+  FAILED     // Telephony / system failure
+  DROPPED    // Call dropped unexpectedly
+  TIMEOUT    // Call timed out waiting for response
+  PROVIDER_ERROR // Telephony provider error
+  CANCELLED  // Cancelled before dial
+  CALLED     // Legacy backward compatibility
+  EXCUSED    // Parent excused the absence
+  EXHAUSTED  // Max retry attempts reached
+}
+
+/// Purpose of an AI-driven or automated parent phone call
+enum CallPurpose {
+  ABSENCE_NOTIFICATION
+  FEE_PAYMENT_REMINDER
+  FEE_UPDATE_FOLLOWUP
+  GENERAL_PARENT_NOTIFICATION
+}
+
+/// Structured AI call conversation outcome
+enum CallOutcome {
+  PARENT_ANSWERED
+  PARENT_ACKNOWLEDGED
+  CALLBACK_REQUESTED
+  PAYMENT_COMMITMENT
+  NO_ANSWER
+  BUSY
+  WRONG_NUMBER
+  INVALID_NUMBER
+  FAILED
+}
+
+/// Type of fee adjustment requested by a Mentor
+enum FeeUpdateRequestType {
+  CORRECTION
+  WAIVER
+  DISCOUNT
+  STATUS_UPDATE
+}
+
+/// Approval lifecycle status of a Mentor's fee update request
+enum FeeUpdateStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCHOOL
+// ─────────────────────────────────────────────────────────────────────────────
+
+model School {
+  id       Int    @id @default(autoincrement())
+  name     String
+  code     String @unique
+  location String
+
+  status    String    @default("ACTIVE")
+  deletedAt DateTime?
+
+  smsEnabled        Boolean @default(false)
+  enableClassConfig Boolean @default(false)
+  smsMode           String?
+
+  smsLimit Int?
+  smsUsed  Int  @default(0)
+
+  // ── New feature fields ─────────────────────────────────────────────────────
+  /// Controls whether the Principal can create a new academic year.
+  /// Automatically set to false after creation; SuperAdmin resets it.
+  canCreateAcademicYear Boolean        @default(true)
+  /// Determines how teachers submit attendance for this school
+  attendanceMode        AttendanceMode @default(TWICE_DAILY)
+  /// JSON map of enabled/disabled service modules.
+  /// e.g. { "attendance": true, "fees": true, "marks": true, "calls": true }
+  activeServices        Json           @default("{\"attendance\": true, \"fees\": true, \"marks\": true, \"calls\": true}")
+  // ──────────────────────────────────────────────────────────────────────────
+
+  users      User[]
+  students   Student[]
+  teachers   Teacher[]
+  principals Principal[]
+
+  attendances        Attendance[]
+  attendanceSessions AttendanceSession[]
+  marks              Marks[]
+  schedules          Schedule[]
+  syllabusPlans      SyllabusPlan[]
+  scheduleBreaks     ScheduleBreak[]
+  notifications      Notification[]
+  holidays           Holiday[]
+  feedbacks          TeacherFeedback[]
+  feedbackCampaigns  FeedbackCampaign[]
+  correctionRequests CorrectionRequest[]
+  examConfigs        ExamConfig[]
+  auditLogs          AuditLog[]
+  fees               Fee[]
+  payments           PaymentHistory[]
+  classConfigs       ClassConfig[]
+
+  // New relations for extended features
+  academicYears         AcademicYear[]
+  callQueues            DailyAbsenteeCallQueue[]
+  callRecords           CallRecord[]
+  feeCorrectionRequests FeeCorrectionRequest[]
+  feeUpdateRequests     FeeUpdateRequest[]
+  promotions            StudentPromotion[]
+  classMentors          ClassMentor[]
+  features              SchoolFeature[]
+  accountantAssignments AccountantAssignment[]
+
+  createdAt DateTime @default(now())
+
+  isDeleted Boolean @default(false)
+  deletedBy Int?
+
+  @@index([status])
+}
+
+model User {
+  id       Int    @id @default(autoincrement())
+  schoolId Int? // ✅ FIXED (optional)
+  name     String
+  email    String @unique
+  password String
+  role     String
+
+  userCode String
+
+  status       String  @default("ACTIVE")
+  profileImage String? // ✅ ADD THIS
+
+  school School? @relation(fields: [schoolId], references: [id]) // ✅ FIXED
+
+  student       Student?
+  teacher       Teacher?
+  principal     Principal?
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  payments      PaymentHistory[]
+  createdAt     DateTime         @default(now())
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy Int?
+
+  // Fee correction relations (named to avoid Prisma ambiguity)
+  auditorCorrections       FeeCorrectionRequest[] @relation("AuditorCorrections")
+  reviewedCorrections      FeeCorrectionRequest[] @relation("ReviewerCorrections")
+  correctionsRequested     FeeCorrectionRequest[] @relation("CorrectionRequestedBy")
+  feeRequestsSubmitted     FeeUpdateRequest[]     @relation("FeeRequestsSubmitted")
+  feeRequestsReviewed      FeeUpdateRequest[]     @relation("FeeRequestsReviewed")
+  callsInitiated           CallRecord[]           @relation("CallInitiator")
+  promotionsPerformed      StudentPromotion[]
+  mentorsAssigned          ClassMentor[]          @relation("MentorAssignedBy")
+  accountantAssignments    AccountantAssignment[] @relation("AccountantUserAssignments")
+  accountantsAssigned      AccountantAssignment[] @relation("AccountantAssignedBy")
+  feedbackCampaignsCreated FeedbackCampaign[]     @relation("CampaignCreatedBy")
+  feedbackCampaignsDeleted FeedbackCampaign[]     @relation("CampaignDeletedBy")
+
+  @@unique([schoolId, userCode])
+  @@index([schoolId])
+}
+
+model Student {
+  id       Int @id @default(autoincrement())
+  userId   Int @unique
+  schoolId Int
+
+  dob     DateTime
+  classId Int
+  class   ClassConfig @relation(fields: [classId], references: [id])
+
+  fatherName String
+  motherName String
+
+  phone       String
+  altPhone    String?
+  gender      String?
+  address     String?
+  attendances Attendance[] // ✅ ADD THIS
+  marks       Marks[] // ✅ ADD THIS
+
+  feedbacks          TeacherFeedback[]
+  correctionRequests CorrectionRequest[]
+  fees               Fee[]
+
+  status String @default("ACTIVE")
+
+  user   User   @relation(fields: [userId], references: [id])
+  school School @relation(fields: [schoolId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy Int?
+
+  // New relations for extended features
+  callQueues            DailyAbsenteeCallQueue[]
+  callRecords           CallRecord[]
+  feeCorrectionRequests FeeCorrectionRequest[]
+  feeUpdateRequests     FeeUpdateRequest[]
+  promotions            StudentPromotion[]
+
+  @@index([schoolId, isDeleted])
+  @@index([classId, isDeleted])
+  @@index([schoolId, classId, isDeleted])
+}
+
+model Teacher {
+  id       Int @id @default(autoincrement())
+  userId   Int @unique
+  schoolId Int
+
+  dob           DateTime?
+  qualification String
+  subjects      String
+
+  phone       String
+  gender      String?
+  experience  Int?
+  attendances Attendance[] // ✅ ADD THIS
+  marks       Marks[] // ✅ ADD THIS
+  schedules   Schedule[] // 🔥 ADD THIS
+  syllabusPlans SyllabusPlan[] // 🔥 NEW SYLLABUS
+  syllabusUpdates TeacherSyllabusUpdate[]
+
+  feedbacks                 TeacherFeedback[]
+  mentorFeedbacks           TeacherFeedback[]    @relation("MentorFeedbacks")
+  correctionRequests        CorrectionRequest[]
+  teacherSubjects           TeacherSubject[]
+  classMentors              ClassMentor[]
+  accountantAssignments     AccountantAssignment[]
+  callRecordsAsMentor       CallRecord[]         @relation("MentorCalls")
+  feeUpdateRequestsAsMentor FeeUpdateRequest[]   @relation("MentorFeeRequests")
+
+  status String @default("ACTIVE") // 🔥 IMPORTANT
+
+  user   User   @relation(fields: [userId], references: [id])
+  school School @relation(fields: [schoolId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy Int?
+
+  @@index([schoolId, isDeleted])
+}
+
+model AttendanceSession {
+  id       Int         @id @default(autoincrement())
+  schoolId Int
+  classId  Int
+  class    ClassConfig @relation(fields: [classId], references: [id])
+  date     DateTime
+
+  /// For TWICE_DAILY: "AM" | "PM". For PERIOD_WISE: period number string. Null for ONCE_DAILY.
+  period String?
+
+  completed Boolean @default(false)
+  smsSent   Boolean @default(false)
+
+  school School @relation(fields: [schoolId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, date])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+}
+
+model Attendance {
+  id        Int              @id @default(autoincrement())
+  schoolId  Int
+  studentId Int
+  teacherId Int
+  date      DateTime
+  status    AttendanceStatus
+
+  /// Nullable period identifier matching AttendanceSession.period for mode enforcement.
+  /// null = ONCE_DAILY | "AM"/"PM" = TWICE_DAILY | "1".."N" = PERIOD_WISE
+  period String?
+
+  /// Optional link to the active academic year (populated for new records)
+  academicYearId Int?
+
+  createdAt DateTime @default(now())
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy Int?
+
+  school       School        @relation(fields: [schoolId], references: [id])
+  student      Student       @relation(fields: [studentId], references: [id])
+  teacher      Teacher       @relation(fields: [teacherId], references: [id])
+  academicYear AcademicYear? @relation(fields: [academicYearId], references: [id])
+
+  // Updated: period included to support TWICE_DAILY & PERIOD_WISE modes
+  @@unique([studentId, date, period])
+  @@index([studentId, date])
+  @@index([schoolId, date])
+  @@index([schoolId, status])
+}
+
+model Marks {
+  id        Int @id @default(autoincrement())
+  schoolId  Int
+  studentId Int
+  teacherId Int
+
+  subjectId Int
+  subject   Subject  @relation(fields: [subjectId], references: [id])
+  examType  String
+  marks     Int
+  maxMarks  Int      @default(100)
+  passMarks Int      @default(40)
+  date      DateTime @default(now())
+
+  /// Optional link to the active academic year
+  academicYearId Int?
+
+  createdAt DateTime @default(now())
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy Int?
+
+  school       School        @relation(fields: [schoolId], references: [id])
+  student      Student       @relation(fields: [studentId], references: [id])
+  teacher      Teacher       @relation(fields: [teacherId], references: [id])
+  academicYear AcademicYear? @relation(fields: [academicYearId], references: [id])
+
+  @@index([schoolId])
+  @@index([studentId])
+  @@index([studentId, subjectId])
+}
+
+model Schedule {
+  id Int @id @default(autoincrement())
+
+  schoolId  Int
+  classId   Int
+  subjectId Int
+
+  class     ClassConfig @relation(fields: [classId], references: [id])
+  subject   Subject     @relation(fields: [subjectId], references: [id])
+  teacherId Int
+
+  day       String
+  startTime String
+  endTime   String
+  period    Int
+  teacher   Teacher @relation(fields: [teacherId], references: [id])
+  school    School  @relation(fields: [schoolId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, classId])
+}
+
+model SyllabusPlan {
+  id Int @id @default(autoincrement())
+  schoolId Int
+  academicYear String // e.g. "2026-2027"
+  classId Int
+  subjectId Int
+  teacherId Int
+
+  school School @relation(fields: [schoolId], references: [id])
+  class ClassConfig @relation(fields: [classId], references: [id])
+  subject Subject @relation(fields: [subjectId], references: [id])
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+
+  weeks SyllabusWeek[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([schoolId, classId, subjectId, academicYear])
+  @@index([schoolId])
+}
+
+model SyllabusWeek {
+  id Int @id @default(autoincrement())
+  planId Int
+  weekNumber Int
+  startDate DateTime?
+  endDate DateTime?
+
+  status String @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, DELAYED
+  completionPercentage Int @default(0)
+
+  topics SyllabusTopic[]
+  updates TeacherSyllabusUpdate[]
+  remarks SyllabusRemark[]
+
+  plan SyllabusPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, weekNumber])
+}
+
+model SyllabusTopic {
+  id Int @id @default(autoincrement())
+  weekId Int
+  topicName String
+  isCompleted Boolean @default(false)
+
+  week SyllabusWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
+}
+
+model TeacherSyllabusUpdate {
+  id Int @id @default(autoincrement())
+  weekId Int
+  teacherId Int
+  progressPercentage Int
+  status String // IN_PROGRESS, COMPLETED, DELAYED
+  completionNote String?
+  delayReason String?
+  fileUrl String?
+
+  week SyllabusWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model SyllabusRemark {
+  id Int @id @default(autoincrement())
+  weekId Int
+  principalId Int?
+  teacherId Int?
+  remark String
+
+  week SyllabusWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id Int @id @default(autoincrement())
+
+  schoolId Int
+
+  userId Int? // optional (for personal)
+  role   String? // STUDENT / TEACHER / ALL
+
+  title   String
+  message String
+
+  type   String // SYLLABUS_ALERT / ANNOUNCEMENT
+  isRead Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  user   User?  @relation(fields: [userId], references: [id])
+  school School @relation(fields: [schoolId], references: [id])
+
+  @@index([userId])
+  @@index([schoolId, role])
+}
+
+model ClassConfig {
+  id            Int    @id @default(autoincrement())
+  schoolId      Int
+  name          String
+  periodsPerDay Int
+  status        String @default("ACTIVE")
+
+  schoolStartTime String?
+  schoolEndTime   String?
+  periodDuration  Int?
+
+  /// Optional link to the active academic year for this class grouping
+  academicYearId Int?
+
+  subjects           Subject[]
+  students           Student[]
+  schedules          Schedule[]
+  syllabusPlans      SyllabusPlan[]
+  examConfigs        ExamConfig[]
+  attendanceSessions AttendanceSession[]
+  scheduleBreaks     ScheduleBreak[]
+  promotionsFrom     StudentPromotion[] @relation("PromotionFromClass")
+  promotionsTo       StudentPromotion[] @relation("PromotionToClass")
+  classMentors       ClassMentor[]
+  feedbacks          TeacherFeedback[]
+
+  school       School        @relation(fields: [schoolId], references: [id])
+  academicYear AcademicYear? @relation(fields: [academicYearId], references: [id])
+
+  createdAt DateTime @default(now())
+  Fee       Fee[]
+
+  @@unique([schoolId, name])
+  @@index([schoolId])
+}
+
+model ScheduleBreak {
+  id        Int    @id @default(autoincrement())
+  schoolId  Int
+  classId   Int
+  breakName String
+  startTime String
+  endTime   String
+
+  school School      @relation(fields: [schoolId], references: [id])
+  class  ClassConfig @relation(fields: [classId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, classId])
+}
+
+model Subject {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  classId Int
+  class   ClassConfig @relation(fields: [classId], references: [id])
+
+  // 🔥 ADD THESE
+  schedules       Schedule[]
+  syllabusPlans   SyllabusPlan[]
+  marks           Marks[]
+  teacherSubjects TeacherSubject[]
+  feedbacks       TeacherFeedback[]
+
+  @@unique([classId, name])
+}
+
+model TeacherSubject {
+  id        Int @id @default(autoincrement())
+  teacherId Int
+  subjectId Int
+
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+  subject Subject @relation(fields: [subjectId], references: [id])
+
+  @@unique([teacherId, subjectId])
+}
+
+model TeacherFeedback {
+  id        Int @id @default(autoincrement())
+  schoolId  Int
+  teacherId Int
+  studentId Int
+  subjectId Int?
+  classId   Int?
+  mentorId  Int?
+
+  rating       Int // 1–5
+  comment      String?
+  feedbackType String  @default("SUBJECT_TEACHER") // "SUBJECT_TEACHER" | "MENTOR" | "GENERAL"
+  isSensitive  Boolean @default(false)
+
+  campaignId  Int?
+  campaign    FeedbackCampaign? @relation(fields: [campaignId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  school  School       @relation(fields: [schoolId], references: [id])
+  teacher Teacher      @relation(fields: [teacherId], references: [id])
+  student Student      @relation(fields: [studentId], references: [id])
+  subject Subject?     @relation(fields: [subjectId], references: [id])
+  class   ClassConfig? @relation(fields: [classId], references: [id])
+  mentor  Teacher?     @relation("MentorFeedbacks", fields: [mentorId], references: [id])
+
+  @@index([teacherId, feedbackType])
+  @@index([schoolId])
+  @@index([campaignId, studentId])
+}
+
+model FeedbackCampaign {
+  id           Int      @id @default(autoincrement())
+  schoolId     Int
+  title        String
+  description  String?
+  targetClass  String   // "ALL" or specific class name e.g. "10A"
+  campaignType String   @default("SUBJECT_TEACHER") // "SUBJECT_TEACHER" | "MENTOR" | "CUSTOM_TEACHER" | "CUSTOM_STUDENT" | "SCHOOL"
+  status       String   @default("ACTIVE") // ACTIVE, CLOSED, DELETED
+
+  academicYearId Int?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id])
+
+  isDeleted    Boolean   @default(false)
+  deletedAt    DateTime?
+  deletedBy    Int?
+  deleteReason String?
+
+  createdById Int?
+  createdBy   User? @relation("CampaignCreatedBy", fields: [createdById], references: [id])
+  deletedByUser User? @relation("CampaignDeletedBy", fields: [deletedBy], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school    School            @relation(fields: [schoolId], references: [id])
+  feedbacks TeacherFeedback[]
+
+  @@index([schoolId, status])
+  @@index([schoolId, isDeleted])
+}
+
+model CorrectionRequest {
+  id        Int @id @default(autoincrement())
+  schoolId  Int
+  teacherId Int
+  studentId Int
+
+  type           String // ATTENDANCE / MARKS
+  referenceId    Int? // attendanceId or marksId (optional)
+  date           DateTime? // for lookup if ID is missing
+  subject        String? // for lookup if ID is missing
+  correctedValue String? // the correct value to apply
+
+  reason String
+  status String @default("PENDING") // APPROVED / REJECTED
+
+  createdAt DateTime @default(now())
+
+  school  School  @relation(fields: [schoolId], references: [id])
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+  student Student @relation(fields: [studentId], references: [id])
+
+  @@index([schoolId])
+  @@index([teacherId])
+}
+
+model Principal {
+  id       Int @id @default(autoincrement())
+  userId   Int @unique
+  schoolId Int
+
+  phone String
+  dob   DateTime?
+
+  user   User   @relation(fields: [userId], references: [id])
+  school School @relation(fields: [schoolId], references: [id]) // NEW
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId])
+}
+
+model Counter {
+  id       Int    @id @default(autoincrement())
+  schoolId Int
+  role     String
+  value    Int    @default(0)
+
+  @@unique([schoolId, role])
+}
+
+model Holiday {
+  id Int @id @default(autoincrement())
+
+  schoolId Int
+
+  title       String // "Diwali Holiday"
+  description String? // optional
+  date        DateTime
+  createdAt   DateTime @default(now())
+
+  school School @relation(fields: [schoolId], references: [id])
+
+  @@unique([schoolId, date, title])
+  @@index([schoolId, date])
+}
+
+model Otp {
+  id        Int      @id @default(autoincrement())
+  email     String
+  code      String
+  expiresAt DateTime
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+
+model ExamConfig {
+  id              Int         @id @default(autoincrement())
+  schoolId        Int
+  classId         Int
+  class           ClassConfig @relation(fields: [classId], references: [id])
+  examType        String
+  maxMarks        Int
+  passMarks       Int
+  isUploadEnabled Boolean     @default(true)
+
+  school School @relation(fields: [schoolId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([schoolId, classId, examType])
+}
+
+model AuditLog {
+  id            Int       @id @default(autoincrement())
+  schoolId      Int
+  module        String // "STUDENT", "FEE", "ATTENDANCE"
+  actionType    String // "CREATE", "UPDATE", "DELETE"
+  entityId      Int
+  entityType    String // "Student", "Fee"
+  oldData       Json?
+  newData       Json?
+  changedBy     Int
+  changedByRole String
+  timestamp     DateTime  @default(now())
+  ipAddress     String?
+  userAgent     String?
+  revokeExpiry  DateTime
+  revoked       Boolean   @default(false)
+  revokedAt     DateTime?
+
+  school School @relation(fields: [schoolId], references: [id])
+  user   User   @relation(fields: [changedBy], references: [id])
+
+  @@index([schoolId, module])
+  @@index([schoolId, entityType])
+  @@index([schoolId, actionType])
+  @@index([revokeExpiry])
+}
+
+model Fee {
+  id            Int         @id @default(autoincrement())
+  schoolId      Int
+  studentId     Int
+  studentName   String
+  classId       Int
+  class         ClassConfig @relation(fields: [classId], references: [id])
+  totalFee      Int
+  paidAmount    Int         @default(0)
+  pendingAmount Int
+  paymentStatus String      @default("PENDING") // PENDING, PARTIAL, PAID
+  feeType       String      @default("Tuition")
+  dueDate       DateTime
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school            School             @relation(fields: [schoolId], references: [id])
+  student           Student            @relation(fields: [studentId], references: [id])
+  payments          PaymentHistory[]
+  feeUpdateRequests FeeUpdateRequest[]
+  corrections       FeeCorrectionRequest[]
+
+  @@index([schoolId, classId, isDeleted])
+  @@index([schoolId, paymentStatus, isDeleted])
+  @@index([studentId])
+}
+
+model PaymentHistory {
+  id          Int      @id @default(autoincrement())
+  feeId       Int
+  schoolId    Int
+  amount      Int
+  paymentDate DateTime @default(now())
+  updatedBy   Int // Staff/Principal ID
+
+  paymentMode String?   // "ONLINE" | "OFFLINE"
+  utrNumber   String?   @unique
+  transactionId String? @unique
+
+  remarks String?
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy Int?
+
+  fee         Fee                    @relation(fields: [feeId], references: [id])
+  school      School                 @relation(fields: [schoolId], references: [id])
+  user        User                   @relation(fields: [updatedBy], references: [id])
+  corrections FeeCorrectionRequest[]
+
+  @@index([feeId])
+  @@index([schoolId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACADEMIC YEAR (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Represents a school's academic session (e.g. "2026-2027").
+/// Only one year per school can have status = ACTIVE at any time.
+/// Creation gate enforced via School.canCreateAcademicYear flag.
+model AcademicYear {
+  id        Int                @id @default(autoincrement())
+  schoolId  Int
+  name      String             // e.g. "2026-2027"
+  startDate DateTime
+  endDate   DateTime
+  status    AcademicYearStatus @default(DRAFT)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  school            School                   @relation(fields: [schoolId], references: [id])
+  attendances       Attendance[]
+  marks             Marks[]
+  classConfigs      ClassConfig[]
+  callQueues        DailyAbsenteeCallQueue[]
+  callRecords       CallRecord[]
+  promotionsFrom    StudentPromotion[]       @relation("PromotionFromYear")
+  promotionsTo      StudentPromotion[]       @relation("PromotionToYear")
+  classMentors      ClassMentor[]
+  feeUpdateRequests FeeUpdateRequest[]
+  feedbackCampaigns FeedbackCampaign[]
+
+  @@unique([schoolId, name])
+  @@index([schoolId, status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY ABSENTEE CALL QUEUE (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Created at end-of-day when all class attendance is submitted.
+/// Tracks parent call attempts for absent students with 3-attempt retry logic.
+/// Auto-deleted after 30 days by the nightly cron job (modules/cron/callQueueCleanup.js).
+model DailyAbsenteeCallQueue {
+  id             Int        @id @default(autoincrement())
+  schoolId       Int
+  studentId      Int
+  academicYearId Int?
+  date           DateTime
+
+  parentPhone   String
+  callStatus    CallStatus @default(PENDING)
+
+  /// Number of FAILED call attempts made so far
+  retryCount    Int        @default(0)
+  /// Maximum allowed retries before status becomes EXHAUSTED
+  maxRetries    Int        @default(3)
+
+  lastAttemptAt DateTime?
+  notes         String?
+  createdAt     DateTime   @default(now())
+
+  school       School        @relation(fields: [schoolId], references: [id])
+  student      Student       @relation(fields: [studentId], references: [id])
+  academicYear AcademicYear? @relation(fields: [academicYearId], references: [id])
+
+  @@index([schoolId, date])
+  @@index([schoolId, callStatus])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FEE CORRECTION REQUEST (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Raised by an Auditor to request a fee ledger correction.
+/// Reviewed and resolved (APPROVED/REJECTED) by the Principal.
+/// On APPROVED: fee.paidAmount and fee.pendingAmount are updated within a $transaction.
+model FeeCorrectionRequest {
+  id               Int                 @id @default(autoincrement())
+  schoolId         Int
+  /// User.id of the Auditor who raised the request (legacy/auditor role)
+  auditorId        Int?
+  /// User.id of the requester (Accountant or Auditor)
+  requestedById    Int?
+  requestedByRole  String?             // "ACCOUNTANT" | "AUDITOR"
+  studentId        Int
+  /// Optional direct reference to the Fee record being corrected
+  feeId            Int?
+  /// Optional reference to the specific PaymentHistory record being corrected
+  paymentHistoryId Int?
+  /// Correction amount (positive = add payment, negative = reverse payment)
+  amount           Decimal             @db.Decimal(10, 2)
+  originalValue    Json?
+  requestedValue   Json?
+  reason           String
+  status           FeeCorrectionStatus @default(PENDING)
+  /// User.id of the Principal who resolved the request
+  reviewedById     Int?
+  reviewedAt       DateTime?
+  /// Resolution notes or rejection reason added by the Principal
+  notes            String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  school         School          @relation(fields: [schoolId], references: [id])
+  auditor        User?           @relation("AuditorCorrections", fields: [auditorId], references: [id])
+  requestedBy    User?           @relation("CorrectionRequestedBy", fields: [requestedById], references: [id])
+  student        Student         @relation(fields: [studentId], references: [id])
+  reviewer       User?           @relation("ReviewerCorrections", fields: [reviewedById], references: [id])
+  paymentHistory PaymentHistory? @relation(fields: [paymentHistoryId], references: [id])
+  fee            Fee?            @relation(fields: [feeId], references: [id])
+
+  @@index([schoolId, status])
+  @@index([auditorId])
+  @@index([requestedById])
+  @@index([studentId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STUDENT PROMOTION (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tracks the promotion of a student from one academic year/class to another.
+/// The student's master classId is updated to the target class on promotion.
+/// This table preserves the historical record of where the student came from.
+enum PromotionStatus {
+  PROMOTED     // Successfully promoted to next class
+  NOT_PROMOTED // Explicitly marked as not promoted (retained)
+  RETAINED     // Held back in the same class for another year
+}
+
+model StudentPromotion {
+  id       Int @id @default(autoincrement())
+  schoolId Int
+
+  studentId Int
+
+  /// Academic year the student is being promoted FROM
+  fromAcademicYearId Int
+  /// Academic year the student is being promoted TO
+  toAcademicYearId   Int
+
+  /// Class the student was in before promotion
+  fromClassId Int
+  /// Class the student is assigned to after promotion
+  toClassId   Int
+
+  status PromotionStatus @default(PROMOTED)
+
+  /// The principal or user who performed the promotion
+  promotedBy Int
+
+  notes     String?
+  createdAt DateTime @default(now())
+
+  school           School        @relation(fields: [schoolId], references: [id])
+  student          Student       @relation(fields: [studentId], references: [id])
+  fromAcademicYear AcademicYear  @relation("PromotionFromYear", fields: [fromAcademicYearId], references: [id])
+  toAcademicYear   AcademicYear  @relation("PromotionToYear",   fields: [toAcademicYearId],   references: [id])
+  fromClass        ClassConfig   @relation("PromotionFromClass", fields: [fromClassId], references: [id])
+  toClass          ClassConfig   @relation("PromotionToClass",   fields: [toClassId],   references: [id])
+  promoter         User          @relation(fields: [promotedBy], references: [id])
+
+  /// Prevent the same student from being promoted twice into the same target year
+  @@unique([studentId, toAcademicYearId])
+  @@index([schoolId])
+  @@index([studentId])
+  @@index([fromAcademicYearId])
+  @@index([toAcademicYearId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLASS MENTOR / CLASS TEACHER (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum MentorAssignmentType {
+  MANUAL
+  FIRST_PERIOD_DEFAULT
+}
+
+/// Represents the assignment of a Faculty member as the Class Mentor for a Class + Section.
+/// Academic year aware: preserved historically upon student promotion or year closure.
+/// Only one active assignment per school + academic year + class at any time.
+model ClassMentor {
+  id             Int                  @id @default(autoincrement())
+  schoolId       Int
+  academicYearId Int
+  classId        Int
+  teacherId      Int
+  assignmentType MentorAssignmentType @default(MANUAL)
+  isActive       Boolean              @default(true)
+  startDate      DateTime             @default(now())
+  endDate        DateTime?
+  assignedById   Int?
+
+  school       School       @relation(fields: [schoolId], references: [id])
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id])
+  class        ClassConfig  @relation(fields: [classId], references: [id])
+  teacher      Teacher      @relation(fields: [teacherId], references: [id])
+  assignedBy   User?        @relation("MentorAssignedBy", fields: [assignedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId, academicYearId, classId, isActive])
+  @@index([schoolId, teacherId, isActive])
+  @@index([classId, isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCHOOL FEATURE TOGGLES (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-school feature flag and configuration table.
+/// Allows SuperAdmin to enable/disable features independently for each tenant/school.
+model SchoolFeature {
+  id            Int      @id @default(autoincrement())
+  schoolId      Int
+  featureKey    String   // e.g. "ATTENDANCE", "CLASS_MENTOR", "ATTENDANCE_MODE", etc.
+  enabled       Boolean  @default(true)
+  configuration Json?    // Optional structured config, e.g. { "mode": "PERIOD_BY_PERIOD" }
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  school        School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@unique([schoolId, featureKey])
+  @@index([schoolId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI CALL RECORDS & LIFECYCLE (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Full lifecycle call accounting record for AI Parent Calling.
+/// Correlates with student, assigned mentor, attendance event or fee overdue event.
+model CallRecord {
+  id             Int          @id @default(autoincrement())
+  schoolId       Int
+  academicYearId Int?
+  mentorId       Int?         // Teacher.id of the Class Mentor
+  studentId      Int
+  parentPhone    String
+  callPurpose    CallPurpose
+  callStatus     CallStatus   @default(PENDING)
+  outcome        CallOutcome?
+  provider       String       @default("AI_CALL_AGENT")
+  providerCallId String?      @unique
+  startedAt      DateTime?
+  answeredAt     DateTime?
+  endedAt        DateTime?
+  duration       Int          @default(0) // Duration in seconds
+  cost           Decimal?     @db.Decimal(10, 4)
+  retryCount     Int          @default(0)
+  maxRetries     Int          @default(3)
+  idempotencyKey String?      @unique
+  transcript     String?      @db.Text
+  summary        String?      @db.Text
+  metadata       Json?        // Structured variables: studentName, className, pendingAmount, etc.
+  notes          String?
+  initiatedBy    Int?         // User.id if triggered manually
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  school       School        @relation(fields: [schoolId], references: [id])
+  student      Student       @relation(fields: [studentId], references: [id])
+  academicYear AcademicYear? @relation(fields: [academicYearId], references: [id])
+  mentor       Teacher?      @relation("MentorCalls", fields: [mentorId], references: [id])
+  initiator    User?         @relation("CallInitiator", fields: [initiatedBy], references: [id])
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, callStatus])
+  @@index([schoolId, callPurpose])
+  @@index([schoolId, mentorId])
+  @@index([studentId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MENTOR FEE UPDATE REQUEST & AUDIT WORKFLOW (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Fee update request raised by a Class Mentor.
+/// Reviewed, verified, and approved/rejected by a Fee Auditor.
+/// Prevents mentors from directly modifying student fee ledgers.
+model FeeUpdateRequest {
+  id             Int                  @id @default(autoincrement())
+  schoolId       Int
+  academicYearId Int?
+  studentId      Int
+  mentorId       Int?                 // Teacher.id of the submitting mentor
+  feeRecordId    Int?
+  requestType    FeeUpdateRequestType @default(CORRECTION)
+  oldValue       Json?                // Snapshot of fee record before change
+  newValue       Json                 // Proposed adjustment or new values
+  amount         Decimal?             @db.Decimal(10, 2)
+  reason         String
+  notes          String?
+  status         FeeUpdateStatus      @default(PENDING)
+  requestedBy    Int                  // User.id of Mentor
+  requestedAt    DateTime             @default(now())
+  reviewedBy     Int?                 // User.id of Fee Auditor
+  reviewedAt     DateTime?
+  reviewComment  String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  school       School        @relation(fields: [schoolId], references: [id])
+  student      Student       @relation(fields: [studentId], references: [id])
+  academicYear AcademicYear? @relation(fields: [academicYearId], references: [id])
+  fee          Fee?          @relation(fields: [feeRecordId], references: [id])
+  mentor       Teacher?      @relation("MentorFeeRequests", fields: [mentorId], references: [id])
+  requester    User          @relation("FeeRequestsSubmitted", fields: [requestedBy], references: [id])
+  reviewer     User?         @relation("FeeRequestsReviewed", fields: [reviewedBy], references: [id])
+
+  @@index([schoolId, status])
+  @@index([schoolId, requestedBy])
+  @@index([studentId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCOUNTANT ASSIGNMENT (NEW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Represents the assignment of Accountant responsibility to a Teacher or Staff member.
+/// Principal can assign, change, or remove this capability.
+/// Enforces business rule: Only one active Accountant per school at any given time.
+model AccountantAssignment {
+  id           Int       @id @default(autoincrement())
+  schoolId     Int
+  userId       Int       // User.id of the assigned person (can be a Teacher)
+  teacherId    Int?      // Optional Teacher.id if the assigned person is a Teacher
+  isActive     Boolean   @default(true)
+  startDate    DateTime  @default(now())
+  endDate      DateTime?
+  assignedById Int       // User.id of Principal who made the assignment
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  school     School   @relation(fields: [schoolId], references: [id])
+  user       User     @relation("AccountantUserAssignments", fields: [userId], references: [id])
+  teacher    Teacher? @relation(fields: [teacherId], references: [id])
+  assignedBy User     @relation("AccountantAssignedBy", fields: [assignedById], references: [id])
+
+  @@index([schoolId, isActive])
+  @@index([userId, isActive])
+}
+
+
+

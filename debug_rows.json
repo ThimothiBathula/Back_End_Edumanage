@@ -1,0 +1,47 @@
+[
+  [
+    "Class Name",
+    "Periods / Day",
+    "Subjects"
+  ],
+  [
+    3,
+    6,
+    "telugu,hindi,english,maths,science,social"
+  ],
+  [
+    4,
+    6,
+    "telugu,hindi,english,maths,science,social"
+  ],
+  [
+    5,
+    6,
+    "telugu,hindi,english,maths,science,social"
+  ],
+  [
+    6,
+    6,
+    "telugu,hindi,english,maths,science,social"
+  ],
+  [
+    7,
+    6,
+    "telugu,hindi,english,maths,science,social"
+  ],
+  [
+    8,
+    6,
+    "telugu,hindi,english,maths,physics,biology,social"
+  ],
+  [
+    9,
+    6,
+    "telugu,hindi,english,maths,physics,biology,social"
+  ],
+  [
+    10,
+    6,
+    "telugu,hindi,english,maths,physics,biology,social"
+  ]
+]
